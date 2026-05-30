@@ -1,0 +1,254 @@
+library(data.table)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Loading in datasets
+allvars        <- fread("/Users/nickcampolo/all_vars.csv")
+nogales_temp   <- fread("/Users/nickcampolo/Desktop/nogales_weekly_tmax.csv")
+max_wait_times <- fread("/Users/nickcampolo/Desktop/border_wait_times_weekly_with_abs_max.csv")
+
+nogales_trucks <- read.delim(
+  "/Users/nickcampolo/Desktop/nogales_trucks.csv",
+  fileEncoding = "UTF-16",
+  sep = "\t"
+) %>%
+  mutate(
+    month_date      = as.Date(paste(Year, Month.of.Date, "01"), format = "%Y %B %d"),
+    trucks_per_week = Value / 4.33
+  ) %>%
+  select(month_date, trucks_per_week)
+
+# Joins
+allvars <- allvars %>%
+  mutate(month_date = floor_date(as.Date(week_start_date), "month")) %>%
+  left_join(nogales_trucks,  by = "month_date") %>%
+  left_join(nogales_temp,    by = "week_start_date") %>%
+  left_join(max_wait_times,  by = c("week_start_date" = "Date"))
+
+# Pull vectors
+max_wait_nogales <- allvars$abs_max_wait_nogales
+tomato_p         <- allvars$tomato_real
+diesel_p         <- allvars$diesel_real
+
+# Module 1: engine idle fuel cost per minute
+idle_consumption_hr <- 0.8
+fuel_cost_idle_min  <- diesel_p * (idle_consumption_hr / 60)
+
+# Module 2: temperature-gradient AC cost per minute
+# Quintile breakpoints from actual Nogales temperature data
+temp_quintiles <- quantile(allvars$avg_tmax, probs = seq(0, 1, 0.2), na.rm = TRUE)
+cat("Nogales temperature quintile breakpoints:\n")
+print(temp_quintiles)
+
+allvars <- allvars %>%
+  mutate(
+    ac_consumption = case_when(
+      avg_tmax <= 55                                                        ~ 0.5,
+      avg_tmax > 55  & avg_tmax <= temp_quintiles["20%"]                   ~ 0.6,
+      avg_tmax > temp_quintiles["20%"] & avg_tmax <= temp_quintiles["40%"] ~ 0.7,
+      avg_tmax > temp_quintiles["40%"] & avg_tmax <= temp_quintiles["60%"] ~ 0.8,
+      avg_tmax > temp_quintiles["60%"] & avg_tmax <= temp_quintiles["80%"] ~ 0.9,
+      avg_tmax > temp_quintiles["80%"]                                     ~ 1.0,
+      TRUE ~ 0.5  # fallback for NAs
+    )
+  )
+
+ac_cost_per_min <- allvars$ac_consumption * diesel_p / 60
+
+# Module 3: total idle cost and tomato equivalent
+total_cost_per_min <- fuel_cost_idle_min + ac_cost_per_min
+total_idle_cost    <- total_cost_per_min * max_wait_nogales
+tomato_cost_equiv  <- total_idle_cost / tomato_p
+
+allvars$ac_consumption     <- allvars$ac_consumption
+allvars$total_cost_per_min <- total_cost_per_min
+allvars$total_idle_cost    <- total_idle_cost
+allvars$tomato_cost_equiv  <- tomato_cost_equiv
+
+# Collapse to one row per week
+weekly_costs <- allvars %>%
+  group_by(week_start_date) %>%
+  slice(1) %>%
+  ungroup()
+
+# Annual summary scaled to all trucks
+annual_summary <- weekly_costs %>%
+  group_by(year) %>%
+  summarise(
+    total_cost_usd = sum(total_cost_per_min * abs_max_wait_nogales * trucks_per_week,             na.rm = TRUE),
+    total_ac_hours = sum(ac_consumption * abs_max_wait_nogales * trucks_per_week / 60,            na.rm = TRUE),
+    tomato_equiv   = sum(total_cost_per_min * abs_max_wait_nogales * trucks_per_week / tomato_real, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Summary statistics (2008-2022)
+annual_summary %>% filter(year > 2007 & year < 2023)
+mean(weekly_costs$total_idle_cost,    na.rm = TRUE)
+max(weekly_costs$total_idle_cost,     na.rm = TRUE)
+mean(weekly_costs$tomato_cost_equiv,  na.rm = TRUE)
+
+# Plot: annual tomato-dollar idle cost
+plot_annualsummary <- annual_summary %>%
+  filter(year > 2007 & year < 2023)
+
+annual_summary_plot <- ggplot(plot_annualsummary, aes(x = factor(year), y = tomato_equiv)) +
+  geom_col(fill = "#c0392b", alpha = 0.85) +
+  geom_hline(
+    yintercept = mean(plot_annualsummary$tomato_equiv, na.rm = TRUE),
+    linetype = "dashed", color = "gray40", linewidth = 0.6
+  ) +
+  scale_y_continuous(
+    labels = scales::comma,
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    title    = "Annual diesel costs from idling and refrigeration at Nogales",
+    subtitle = "Tomato-dollar equivalent across all trucks, idling at maximum weekly wait times",
+    x        = NULL,
+    y        = "Tomato-dollar equivalent"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x        = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    plot.title         = element_text(face = "bold"),
+    plot.caption       = element_text(color = "gray50", size = 9)
+  )
+
+ggsave("/Users/nickcampolo/Desktop/annual_summary.pdf",
+       plot = annual_summary_plot, width = 9, height = 6, device = "pdf")
+
+# Module 4: CBP officer cost-benefit
+delta_wait_per_officer <- 19.4   # minutes saved per officer, Jara et al. Table 2
+cbp_annual_cost        <- 100000 # total compensation, OPM Salary Table 2024-RUS + benefits
+working_days           <- 153    # enforcement days per officer per year, Jara et al. p.3
+
+avg_weekly_trucks      <- mean(weekly_costs$trucks_per_week, na.rm = TRUE)
+
+avg_annual_tomato_cost <- mean(plot_annualsummary$tomato_equiv, na.rm = TRUE)
+
+tradeoff <- data.frame(
+  n                 = 1:10,
+  officer_cost      = (1:10) * cbp_annual_cost,
+  tomato_cost_saved = (1:10) * avg_annual_tomato_cost *
+    (delta_wait_per_officer / mean(max_wait_nogales, na.rm = TRUE))
+) %>%
+  mutate(net_benefit = tomato_cost_saved - officer_cost)
+
+
+# LaTeX table for tradeoff:
+
+library(knitr)
+library(kableExtra)
+
+tradeoff %>%
+  mutate(
+    officer_cost      = scales::dollar(round(officer_cost, 0)),
+    tomato_cost_saved = scales::dollar(round(tomato_cost_saved, 0)),
+    net_benefit       = scales::dollar(round(net_benefit, 0))
+  ) %>%
+  kable(
+    format    = "latex",
+    booktabs  = TRUE,
+    col.names = c("+N officers", "Officer cost", 
+                  "Tomato-dollar savings", "Net benefit"),
+    caption   = "Cost-benefit tradeoff of additional CBP officers at Nogales.",
+    label     = "tab:tradeoff",
+    escape    = FALSE
+  ) %>%
+  kable_styling(latex_options = c("hold_position"))
+
+###
+# Import volume: lbs per truck 
+# fread won't parse this file cleanly due to its irregular header structure
+# Read raw lines instead and extract the Grand Total row directly
+import_lines <- readLines("/Users/nickcampolo/Desktop/tomato_import_volume.csv")
+grand_total_line <- import_lines[grep("Grand Total", import_lines)]
+
+# Split and clean the values
+gt_values <- strsplit(grand_total_line, ",")[[1]]
+gt_values <- gsub('"', '', gt_values)   # remove quotes
+gt_values <- trimws(gt_values)
+
+# Years 2008-2022 are in positions 7-21 (1-indexed)
+total_mt_by_year <- data.frame(
+  year     = 2008:2022,
+  total_mt = as.numeric(gt_values[7:21])
+)
+
+# Convert to lbs, apply Nogales share
+nogales_share <- 0.28
+
+# Annual truck counts for 2008-2022
+annual_truck_counts <- nogales_trucks %>%
+  mutate(year = lubridate::year(month_date)) %>%
+  filter(year %in% 2008:2022) %>%
+  group_by(year) %>%
+  summarise(annual_trucks = sum(trucks_per_week, na.rm = TRUE), .groups = "drop")
+
+# Lbs per truck by year, then average
+lbs_per_truck_by_year <- total_mt_by_year %>%
+  left_join(annual_truck_counts, by = "year") %>%
+  mutate(
+    total_lbs     = total_mt * 2204.62,
+    nogales_lbs   = total_lbs * nogales_share,
+    lbs_per_truck = nogales_lbs / annual_trucks
+  )
+
+avg_lbs_per_truck <- mean(lbs_per_truck_by_year$lbs_per_truck, na.rm = TRUE)
+avg_annual_trucks <- mean(lbs_per_truck_by_year$annual_trucks, na.rm = TRUE)
+
+cat("Average lbs per truck:", round(avg_lbs_per_truck, 0), "\n")
+
+# Marginal cost table
+# Use percentiles of abs_max_wait_nogales as the duration rows
+# (from weekly_costs, one row per week)
+wait_percentiles <- quantile(
+  weekly_costs$abs_max_wait_nogales,
+  probs = c(0.50, 0.75, 0.90, 1.00),
+  na.rm = TRUE
+)
+
+cat("Wait time percentiles (minutes):\n")
+print(round(wait_percentiles, 1))
+
+durations <- as.numeric(wait_percentiles)
+duration_labels <- c("Mean", "75th percentile", "90th percentile", "Maximum")
+
+# Use mean for the "mean" row instead of median
+durations[1] <- mean(weekly_costs$abs_max_wait_nogales, na.rm = TRUE)
+
+avg_cost_per_min    <- mean(total_cost_per_min, na.rm = TRUE)
+cost_per_min_per_lb <- avg_cost_per_min / avg_lbs_per_truck
+cost_per_min_all    <- avg_cost_per_min * avg_annual_trucks
+
+marginal_table <- data.frame(
+  duration   = duration_labels,
+  minutes    = round(durations, 1),
+  per_lb     = durations * cost_per_min_per_lb,
+  per_truck  = durations * avg_cost_per_min,
+  all_trucks = durations * cost_per_min_all
+) %>%
+  mutate(
+    per_lb     = round(per_lb, 5),
+    per_truck  = round(per_truck, 2),
+    all_trucks = scales::dollar(round(all_trucks, 0))
+  )
+
+marginal_table %>%
+  kable(
+    format    = "latex",
+    booktabs  = TRUE,
+    col.names = c("Max wait time", "Minutes", "Cost per lb",
+                  "Per truck", "All trucks"),
+    caption   = "Marginal Cost Due to Idling Wait Times",
+    label     = "tab:marginal_cost",
+    escape    = FALSE
+  ) %>%
+  kable_styling(latex_options = c("hold_position"))
+
+
+summary(allvars$Number.of.Stores)
+
+
