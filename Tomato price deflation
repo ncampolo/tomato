@@ -1,0 +1,36 @@
+# LOAD DATA 
+tomato <- read.csv("/Users/nickcampolo/Downloads/tomato_prices_nominal.csv")
+cpi    <- read.csv("/Users/nickcampolo/Desktop/Thesis Data/Currency Deflators/cpi.csv")
+
+# PARSE DATES 
+tomato$Date          <- as.Date(tomato$Date, format = "%m/%d/%Y")
+cpi$observation_date <- as.Date(cpi$observation_date)
+
+# CREATE YEAR-MONTH JOIN KEY 
+tomato$ym <- format(tomato$Date, "%Y-%m")
+cpi$ym    <- format(cpi$observation_date, "%Y-%m")
+
+# 2023 AVERAGE CPI AS REFERENCE
+cpi_2023_base <- mean(
+  cpi$CUSR0000SAF11[format(cpi$observation_date, "%Y") == "2023"],
+  na.rm = TRUE
+)
+
+
+# MERGE CPI INTO TOMATO 
+tomato <- merge(tomato,
+                cpi[, c("ym", "CUSR0000SAF11")],
+                by = "ym", all.x = TRUE)
+
+
+
+tomato$real_price <- tomato$Weighted.Avg.Price * (cpi_2023_base / tomato$CUSR0000SAF11)
+tomato$real_max_price <- tomato$High.Price * (cpi_2023_base / tomato$CUSR0000SAF11)
+tomato$real_min_price <- tomato$Low.Price * (cpi_2023_base / tomato$CUSR0000SAF11)
+
+# CLEAN UP AND SAVE 
+tomato$ym            <- NULL
+tomato$CUSR0000SAF11 <- NULL
+tomato               <- tomato[order(tomato$Date), ]
+
+write.csv(tomato, "tomato_prices_deflated.csv", row.names = FALSE)
