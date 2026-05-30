@@ -1,0 +1,29 @@
+library(data.table)
+library(stargazer)
+
+df <- fread("all_vars.csv")
+
+stats_df <- df[, .(
+  `U.S. Retail Tomato Price`            = tomato_real,
+  `Average Weekly Wait Time, Laredo`    = avg_wait_laredo,
+  `Average Weekly Wait Time, Nogales`   = avg_wait_nogales,
+  `Average Weekly Wait Time, Otay Mesa` = avg_wait_otay,
+  `U.S. Diesel Price`                   = diesel_real,
+  `MXN-USD Exchange Rate`               = exchange_rate,
+  `Precipitation (West)`                = precip_west,
+  `Precipitation (East)`                = precip_east,
+  `Average Temperature (West)`          = temp_west,
+  `Average Temperature (East)`          = temp_east,
+  `Extreme Weather`                     = extreme_weather
+)]
+
+stargazer(
+  as.data.frame(stats_df),
+  type             = "latex",
+  title            = "Summary Statistics for All Variables",
+  label            = "tab:summary_stats",
+  digits           = 3,
+  summary.stat     = c("n", "mean", "sd", "min", "max"),
+  covariate.labels = names(stats_df),
+  header           = FALSE
+)
