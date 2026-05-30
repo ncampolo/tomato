@@ -1,0 +1,17 @@
+# LOAD DATA 
+fx <- read.csv('/Users/nickcampolo/Desktop/Thesis Data/Exchange Rate/mxn_usd_exchange_rate.csv')
+
+# PARSE DATES 
+fx$observation_date <- as.Date(fx$observation_date)
+
+# ASSIGN WEEK
+fx$week_start <- fx$observation_date - (as.numeric(format(fx$observation_date, "%w")) - 5) %% 7
+
+# WEEKLY AVERAGE 
+fx_weekly <- aggregate(DEXMXUS ~ week_start, data = fx, FUN = mean, na.rm = TRUE)
+fx_weekly <- fx_weekly[order(fx_weekly$week_start), ]
+names(fx_weekly) <- c("Date", "exchange_rate")
+
+
+# SAVE 
+write.csv(fx_weekly, "exchange_weekly.csv", row.names = FALSE)
