@@ -1,0 +1,41 @@
+# LOAD ALL FILES
+tomato   <- read.csv("/Users/nickcampolo/tomato_prices_deflated.csv", check.names = FALSE)
+weather  <- read.csv("/Users/nickcampolo/Desktop/Thesis Data/weather_vars.csv")
+wait     <- read.csv("/Users/nickcampolo/border_wait_times_weekly.csv")
+exchange <- read.csv("/Users/nickcampolo/exchange_weekly.csv")
+diesel   <- read.csv("/Users/nickcampolo/diesel_weekly_real.csv")
+
+# PARSE DATES
+tomato$Date            <- as.Date(tomato$Date)
+weather$Date           <- as.Date(weather$Date)
+wait$Date              <- as.Date(wait$Date)
+exchange$Date          <- as.Date(exchange$Date)
+diesel$week_start_date <- as.Date(diesel$week_start_date)
+
+# RENAME DIESEL DATE TO MATCH OTHER FILES
+names(diesel)[names(diesel) == "week_start_date"] <- "Date"
+
+# RENAME TOMATO PRICE COLUMNS FOR CLARITY
+names(tomato)[names(tomato) == "Weighted Avg Price"] <- "tomato_nominal"
+names(tomato)[names(tomato) == "real_price"]         <- "tomato_real"
+
+# MERGE: start from tomato (many rows per week), join everything else
+merged <- merge(tomato,  weather,  by = "Date", all.x = TRUE)
+merged <- merge(merged,  wait,     by = "Date", all.x = TRUE)
+merged <- merge(merged,  exchange, by = "Date", all.x = TRUE)
+merged <- merge(merged,  diesel,   by = "Date", all.x = TRUE)
+
+# RENAME DATE AND ADD YEAR / MONTH
+names(merged)[names(merged) == "Date"] <- "week_start_date"
+merged$year  <- as.integer(format(merged$week_start_date, "%Y"))
+merged$month <- as.integer(format(merged$week_start_date, "%m"))
+
+# SORT
+merged <- merged[order(merged$week_start_date,
+                       merged$Region,
+                       merged$Commodity,
+                       merged$Variety), ]
+
+
+# SAVE
+write.csv(merged, "all_vars.csv", row.names = FALSE)
