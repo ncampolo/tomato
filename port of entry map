@@ -1,0 +1,30 @@
+library(tidyverse)
+library(maps)
+
+ports <- tibble(
+  name = c("Nogales, AZ\n(28% of imports)", "Laredo, TX\n(55% of imports)", "Otay Mesa, CA\n(15% of imports)"),
+  lon  = c(-110.966, -99.503, -116.938),
+  lat  = c(31.336,   27.503,   32.551)
+)
+
+us_states <- map_data("state")
+mexico     <- map_data("world", region = "Mexico")
+
+map<- ggplot() +
+  geom_polygon(data = mexico,   aes(x = long, y = lat, group = group),
+               fill = "#DBA124", color = "#B4841D") +
+  geom_polygon(data = us_states, aes(x = long, y = lat, group = group),
+               fill = "#E3B452", color = "#B4841D") +
+  geom_point(data = ports, aes(x = lon, y = lat),
+             color = "#800000", shape = 15, size = 3) +
+  ggrepel::geom_label_repel(data = ports, aes(x = lon, y = lat, label = name),
+                            size = 3, nudge_y = 0.5) +
+  coord_fixed(ratio = 1.3, xlim = c(-120, -95), ylim = c(26, 35)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Ports of Entry Considered",
+       x = NULL, y = NULL)
+
+
+ggsave("/Users/nickcampolo/Desktop/poe_map.pdf",
+       plot = map, width = 7, height = 5, device = "pdf")
