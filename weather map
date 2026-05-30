@@ -1,0 +1,79 @@
+library(tidyverse)
+library(sf)
+library(geodata)
+
+# --- Production share data ---
+prod_share <- tibble(
+  state = c("Sinaloa", "San Luis Potosí", "Michoacán", "Zacatecas",
+            "Jalisco", "Baja California Sur", "Sonora", "Morelos"),
+  share = c(22, 13, 9, 7, 5, 5, 4, 4)
+)
+
+# --- Mexico shapefiles from GADM ---
+mexico     <- gadm(country = "MEX", level = 0, path = tempdir()) %>% st_as_sf()
+mex_states <- gadm(country = "MEX", level = 1, path = tempdir()) %>% st_as_sf()
+
+# Check spelling: mex_states %>% pull(NAME_1)
+mex_joined <- mex_states %>%
+  left_join(prod_share, by = c("NAME_1" = "state"))
+
+# --- Bounding box rectangles ---
+make_bbox_sf <- function(xmin, xmax, ymin, ymax) {
+  st_bbox(c(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+          crs = st_crs(4326)) %>%
+    st_as_sfc() %>%
+    st_as_sf()
+}
+
+west_sf <- make_bbox_sf(-111.875, -105.0, 22.5, 27.0)
+east_sf <- make_bbox_sf(-105,   -99,  18, 24)
+
+# --- Border crossing ports ---
+# --- Border crossing ports ---
+ports <- tibble(
+  name = c("Nogales, AZ", "Laredo, TX", "Otay Mesa, CA"),
+  lon  = c(-110.934,      -99.507,      -117.053),
+  lat  = c(  31.340,       27.506,        32.572)
+) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+
+# --- Plot ---
+w_map <- ggplot() +
+  geom_sf(data = mex_joined,
+          aes(fill = share),
+          color = "white", linewidth = 0.25) +
+  scale_fill_distiller(
+    palette   = "YlOrRd",
+    direction = 1,
+    na.value  = "grey92",
+    name      = "Production\nShare (%)",
+    breaks    = c(5, 10, 15, 20)
+  ) +
+  geom_sf(data = mexico, fill = NA, color = "grey40", linewidth = 0.4) +
+  geom_sf(data = west_sf,
+          fill = "#2166ac", alpha = 0.20,
+          color = "#2166ac", linewidth = 0.7, linetype = "dashed") +
+  geom_sf(data = east_sf,
+          fill = "#2166ac", alpha = 0.20,
+          color = "#2166ac", linewidth = 0.7, linetype = "dashed") +
+  geom_sf(data = ports, shape = 17, size = 3, color = "black") +
+  annotate("text", x = -108.4, y = 27.6, label = 'Western Region',
+           size = 5, color = "#2166ac", fontface = "bold") +
+  annotate("text", x = -101.5, y = 17.4, label = 'Eastern Region',
+           size = 5, color = "#2166ac", fontface = "bold") +
+  coord_sf(xlim = c(-118, -86), ylim = c(14, 33)) +
+  labs(
+    title    = "Weather Coverage and Tomato Production by State",
+    subtitle = "Dashed boxes = weather data regions | Fill = 2022 production share\n▲ = border ports"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "right",
+    panel.grid      = element_line(color = "grey88", linewidth = 0.15),
+    plot.title      = element_text(face = "bold", size = 18, hjust = 0.5),
+    plot.subtitle   = element_text(size = 15, color = "grey40", hjust = 0.5),
+    plot.caption    = element_text(size = 7, color = "grey50")
+  )
+
+ggsave("~/Desktop/w_map.pdf",
+       plot = w_map, width = 8, height = 5, device = cairo_pdf)
