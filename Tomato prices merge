@@ -1,0 +1,12 @@
+library(dplyr)
+library(readr)
+
+folder <- '/Users/nickcampolo/Desktop/Thesis Data/Retail Tomato Prices/drive-download-20260509T090546Z-3-001/'
+files  <- list.files(folder, pattern = "\\.csv$", full.names = TRUE)
+
+merged_data <- lapply(files, function(f) {
+  read_csv(f, show_col_types = FALSE)
+}) |>
+  bind_rows()
+
+write_csv(merged_data, "tomato_prices_nominal.csv")
